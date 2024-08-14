@@ -1,0 +1,141 @@
+shape：
+obs_dict['hero']['birdview']['masks'].shape
+Out[12]: (15, 192, 192)
+obs_dict['hero']['birdview']['rendered'].shape
+Out[13]: (192, 192, 3)
+self._om_handler
+Out[14]: <carla_gym.core.obs_manager.obs_manager_handler.ObsManagerHandler at 0x7f363fb6ed90>
+obs_dict['hero']['speed'].shape
+Traceback (most recent call last):
+  File "/home/vci-1/.conda/envs/carla/lib/python3.7/site-packages/IPython/core/interactiveshell.py", line 3417, in run_code
+    exec(code_obj, self.user_global_ns, self.user_ns)
+  File "<ipython-input-15-2937ea03456f>", line 1, in <module>
+    obs_dict['hero']['speed'].shape
+AttributeError: 'dict' object has no attribute 'shape'
+obs_dict['hero']['speed']
+Out[16]: 
+{'speed': array([0.], dtype=float32),
+ 'speed_xy': array([0.], dtype=float32),
+ 'forward_speed': array([0.], dtype=float32)}
+obs_dict['hero']['speed']['speed'].shape
+Out[17]: (1,)
+obs_dict['hero']['speed']['speed_xy'].shape
+Out[18]: (1,)
+obs_dict['hero']['speed']['forward_speed'].shape
+Out[19]: (1,)
+obs_dict['hero']['control']['throttle'].shape
+Out[20]: (1,)
+obs_dict['hero']['control']['steer'].shape
+Out[21]: (1,)
+obs_dict['hero']['control']['gear'].shape
+Out[22]: (1,)
+obs_dict['hero']['velocity']['vel_xy'].shape
+Out[23]: (2,)
+obs_dict['hero']['velocity']['acc_xy'].shape
+Out[24]: (2,)
+obs_dict['hero']['velocity']['vel_ang_z'].shape
+Out[25]: (1,)
+
+
+
+
+
+
+
+{'hero': {'birdview': {'rendered': array([[[ 0,  0,  0],
+        [ 0,  0,  0],
+        [ 0,  0,  0],
+        ...,
+        [ 0,  0,  0],
+        [ 0,  0,  0],
+        [ 0,  0,  0]],
+
+       [[ 0,  0,  0],
+        [ 0,  0,  0],
+        [ 0,  0,  0],
+        ...,
+        [ 0,  0,  0],
+        [ 0,  0,  0],
+        [ 0,  0,  0]],
+
+       [[ 0,  0,  0],
+        [ 0,  0,  0],
+        [ 0,  0,  0],
+        ...,
+        [ 0,  0,  0],
+        [ 0,  0,  0],
+        [ 0,  0,  0]],
+
+       ...,
+
+       [[ 0,  0,  0],
+        [ 0,  0,  0],
+        [ 0,  0,  0],
+        ...,
+        [ 0,  0,  0],
+        [ 0,  0,  0],
+        [ 0,  0,  0]],
+
+       [[ 0,  0,  0],
+        [ 0,  0,  0],
+        [ 0,  0,  0],
+        ...,
+        [ 0,  0,  0],
+        [ 0,  0,  0],
+        [ 0,  0,  0]],
+
+       [[46, 52, 54],
+        [46, 52, 54],
+        [46, 52, 54],
+        ...,
+        [ 0,  0,  0],
+        [ 0,  0,  0],
+        [ 0,  0,  0]]], dtype=uint8), 'masks': array([[[  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0],
+        ...,
+        [  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0],
+        [255, 255, 255, ...,   0,   0,   0]],
+
+       [[  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0],
+        ...,
+        [  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0]],
+
+       [[  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0],
+        ...,
+        [  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0]],
+
+       ...,
+
+       [[  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0],
+        ...,
+        [  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0]],
+
+       [[  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0],
+        ...,
+        [  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0]],
+
+       [[  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0],
+        ...,
+        [  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0],
+        [  0,   0,   0, ...,   0,   0,   0]]])}, 'speed': {'speed': array([0.], dtype=float32), 'speed_xy': array([0.], dtype=float32), 'forward_speed': array([0.], dtype=float32)}, 'control': {'throttle': array([0.], dtype=float32), 'steer': array([0.], dtype=float32), 'brake': array([0.], dtype=float32), 'gear': array([0.], dtype=float32), 'speed_limit': array([6.6666665], dtype=float32)}, 'velocity': {'acc_xy': array([0., 0.], dtype=float32), 'vel_xy': array([0., 0.], dtype=float32), 'vel_ang_z': array([0.], dtype=float32)}}}
