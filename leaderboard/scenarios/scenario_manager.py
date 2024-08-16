@@ -47,6 +47,11 @@ from route_manipulation import location_route_to_gps,downsample_route
 from leaderboard.utils.route_parser import RouteParser
 from .criteria import blocked, collision, outside_route_lane, route_deviation, run_stop_sign
 from .criteria import encounter_light, run_red_light
+from torch.utils.tensorboard import SummaryWriter
+from datetime import datetime
+TIMESTAMP = "{0:%Y-%m-%dT%H-%M-%S/}".format(datetime.now())
+path = "/home/vci-1/XT/leaderV2/leaderboard/leaderboard/output/" + TIMESTAMP
+writer = SummaryWriter(path)
 class ScenarioManager(object):
 
     """
@@ -178,6 +183,7 @@ class ScenarioManager(object):
 
         self.criteria_route_deviation = route_deviation.RouteDeviation()
         self.criteria_blocked = blocked.Blocked()
+        self.repetitions = 0
 
 
 
@@ -280,10 +286,11 @@ class ScenarioManager(object):
         model_class = load_entry_point(self._train_cfg['entry_point'])
         ppo_agent = model_class(self._policy, **self._train_cfg['kwargs'])
         return ppo_agent
-    def run_scenario(self,obs_dict):
+    def run_scenario(self,obs_dict,repetitions):
         """
         Trigger the start of the scenario and wait for it to finish/fail
         """
+        self.repetitions = repetitions
         self._trace_route_to_global_target()
         self._last_obs = obs_dict
         self.start_system_time = time.time()
@@ -463,8 +470,8 @@ class ScenarioManager(object):
             total_reward += rewards
             self.count += 1
             n_steps += 1
-
-        print(f"total_reward:{total_reward}")
+        writer.add_scalar('reward/reward_episode',total_reward,self.repetitions)
+        print(f"{self.repetitions}total_reward:{total_reward}")
         # update ppo
         last_values = self._policy.forward_value(self._last_obs)
         self.buffer.compute_returns_and_advantage(last_values, dones=self._last_dones)
@@ -543,7 +550,7 @@ class ScenarioManager(object):
 
                 # Logging
                 clip_fraction = th.mean((th.abs(ratio - 1) > self.clip_range).float()).item()
-                clip_fractions.append(clip_fraction)
+               # clip_fractions.append(clip_fraction)
 
                 if self.clip_range_vf is None:
                     # No clipping
@@ -558,15 +565,19 @@ class ScenarioManager(object):
 
                 loss = policy_loss + self.vf_coef * value_loss \
                     + self.ent_coef * entropy_loss + self.explore_coef * exploration_loss
-
-                losses.append(loss.item())
+                writer.add_scalar('loss_all//episodes', loss.item(), self.repetitions)
+             #   losses.append(loss.item())
                 # Detection policy update
                 if i % 400 == 0:
                     print(f"policy_loss:{loss}")
-                pg_losses.append(policy_loss.item())
-                value_losses.append(value_loss.item())
-                entropy_losses.append(entropy_loss.item())
-                exploration_losses.append(exploration_loss.item())
+                writer.add_scalar('policy_loss/episodes', policy_loss.item(), self.repetitions)
+                writer.add_scalar('value_loss/episodes', value_loss.item(), self.repetitions)
+                writer.add_scalar('entropy_loss/episodes', entropy_loss.item(), self.repetitions)
+                writer.add_scalar('exploration_loss/episodes', exploration_loss.item(), self.repetitions)
+                # pg_losses.append(policy_loss.item())
+                # value_losses.append(value_loss.item())
+                # entropy_losses.append(entropy_loss.item())
+                # exploration_losses.append(exploration_loss.item())
                 # Optimization step
                 self._policy.optimizer.zero_grad()
                 loss.backward()
@@ -580,7 +591,7 @@ class ScenarioManager(object):
                     old_distribution = self._policy.action_dist.proba_distribution(
                         1, 1)
                     kl_div = th.distributions.kl_divergence(old_distribution.distribution, distribution)
-
+                writer.add_scalar('approx_kl_divs/episodes', kl_div.mean().item(), self.repetitions)
                 approx_kl_divs.append(kl_div.mean().item())
 
             if self.target_kl is not None and np.mean(approx_kl_divs) > 1.5 * self.target_kl:
@@ -599,18 +610,18 @@ class ScenarioManager(object):
 
 
         # logs (roach)
-        self.train_debug = {
-            "train/entropy_loss": np.mean(entropy_losses),
-            "train/exploration_loss": np.mean(exploration_losses),
-            "train/policy_gradient_loss": np.mean(pg_losses),
-            "train/value_loss": np.mean(value_losses),
-            "train/last_epoch_kl": np.mean(approx_kl_divs),
-            "train/clip_fraction": np.mean(clip_fractions),
-            "train/loss": np.mean(losses),
-            "train/clip_range": self.clip_range,
-            "train/train_epoch": epoch,
-            "train/learning_rate": self.learning_rate
-        }
+        # self.train_debug = {
+        #     "train/entropy_loss": np.mean(entropy_losses),
+        #     "train/exploration_loss": np.mean(exploration_losses),
+        #     "train/policy_gradient_loss": np.mean(pg_losses),
+        #     "train/value_loss": np.mean(value_losses),
+        #     "train/last_epoch_kl": np.mean(approx_kl_divs),
+        #     "train/clip_fraction": np.mean(clip_fractions),
+        #     "train/loss": np.mean(losses),
+        #     "train/clip_range": self.clip_range,
+        #     "train/train_epoch": epoch,
+        #     "train/learning_rate": self.learning_rate
+        # }
     def define_terminal(self,start_timestamp):
         terminal_reward = 0.0
         terminal_debug = 0

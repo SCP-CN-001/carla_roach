@@ -341,7 +341,7 @@ class LeaderboardEvaluator(object):
             # Initialize and return to the initial obs_dict
             obs_dict = self.manager.load_scenario(self.route_scenario, self.agent_instance, config.index, config.repetition_index)
             # Rendering and Interaction
-            self.manager.run_scenario(obs_dict)
+            self.manager.run_scenario(obs_dict,args.repetitions)
         except AgentError:
             # The agent has failed -> stop the route
             print("\n\033[91mStopping the route, the agent has crashed:")
