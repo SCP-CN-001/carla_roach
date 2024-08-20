@@ -13,6 +13,7 @@ It must not be modified and is for reference only!
 from __future__ import print_function
 
 import os
+from collections import deque
 
 import gym
 import torch
@@ -149,6 +150,7 @@ class ScenarioManager(object):
                                  'distribution_entry_point': 'leaderboard.rl_birdview.models.distributions:BetaDistribution',
                                  'distribution_kwargs': {'dist_init': None}}
         # reward setting
+
         self._maxium_speed = 6.0
         self._tl_offset = -1.6
         self._last_steer = 0.0
@@ -167,7 +169,7 @@ class ScenarioManager(object):
         self._route_length = 0.0
         ROUTES = os.getenv('ROUTES')
         ROUTES_SUBSET = os.getenv('ROUTES_SUBSET')
-
+        self.start_time_store = time.strftime('%Y_%m_%d_%H:_%M_%S', time.localtime(time.time()))
         # V2 route
         self.route_configuration = RouteParser.parse_routes_file(ROUTES, ROUTES_SUBSET)
         self.route_configurations = self.route_configuration[0].keypoints_roach
@@ -178,7 +180,9 @@ class ScenarioManager(object):
 
         # V2 waypoints
         target_transforms = self.route_configurations[1:] #not contain start_point
-
+        self._vehicle_stuck_step = 100
+        self._vehicle_stuck_counter = 0
+        self._speed_queue = deque(maxlen=10)
         # roach waypoints
         # target_transforms1 = self.route_descriptions_dict[0]['ego_vehicles']['hero'][1:]
 
@@ -231,6 +235,9 @@ class ScenarioManager(object):
         self.repetition_number = rep_number
 
         self._spectator = CarlaDataProvider.get_world().get_spectator()
+        self.actor_List = CarlaDataProvider.get_world().get_actors()
+        self.vehicle_list = self.actor_List.filter("*vehicle*")
+        self.walker_list = self.actor_List.filter("*walker*")
         TrafficLightHandler.reset(CarlaDataProvider.get_world())
         self._map = CarlaDataProvider.get_world().get_map()
         self.criteria_collision = collision.Collision(self.ego_vehicles[0], CarlaDataProvider.get_world())
@@ -326,9 +333,9 @@ class ScenarioManager(object):
         continue_training = self.collect_rollouts(self.buffer, self.n_steps)
         self.train()
 
-        start_time = time.strftime('%Y_%m_%d_%H:_M_%S',time.localtime(time.time()))
+
         if self.episodes > 10:
-            model_folder = os.getenv('LEADERBOARD_ROOT')+'/leaderboard/model_pth/' + start_time + '/'
+            model_folder = os.getenv('LEADERBOARD_ROOT')+'/leaderboard/model_pth/' + self.start_time_store + '/'
             if not os.path.exists(model_folder):
                 os.makedirs(model_folder)
             save_path = os.path.join(model_folder, 'roach_'+str(self.episodes)+'.pth')
@@ -451,8 +458,11 @@ class ScenarioManager(object):
             'encounter_light':0,
             'run_stop_sign': info_stop
         }
-        reward, reward_debug = self.defeine_reward()
+        
         done, timeout, terminal_reward, terminal_debug = self.define_terminal(start_timestamp)
+        reward, reward_debug = self.defeine_reward(terminal_reward)
+
+	
         #reward = 0
         timestep = 0
 
@@ -662,9 +672,23 @@ class ScenarioManager(object):
         #     "train/learning_rate": self.learning_rate
         # }
     def define_terminal(self,start_timestamp):
-        terminal_reward = 0.0
+        
         terminal_debug = 0
+        ev_vel = self.ego_vehicles[0].get_velocity()
+        ev_speed = np.linalg.norm(np.array([ev_vel.x, ev_vel.y]))
+        self._speed_queue.append(ev_speed)
 
+        hazard_vehicle_loc = self._is_vehicle_hazard(self.vehicle_list)
+        hazard_ped_loc = self._is_walker_hazard(self.walker_list)
+        light_state, light_loc, _ = TrafficLightHandler.get_light_state(self.ego_vehicles[0],
+                                                         offset=self._tl_offset, dist_threshold=18.0)
+        is_free_road = (hazard_vehicle_loc is None) and (hazard_ped_loc is None) \
+            and (light_state is None or light_state == carla.TrafficLightState.Green)
+        c_vehicle_stuck = self._vehicle_stuck_counter >= self._vehicle_stuck_step
+        if is_free_road and np.mean(self._speed_queue) < 1.0:
+            self._vehicle_stuck_counter += 1
+        if np.mean(self._speed_queue) >= 1.0:
+            self._vehicle_stuck_counter = 0
         # Done condition 1: route completed
         c_route = self._info_criteria['route_completion']['is_route_completed']
         # Done condition 2: blocked
@@ -680,10 +704,17 @@ class ScenarioManager(object):
             timeout = False
         # Done condition 5: collisionc
         c_collision = self._info_criteria['collision'] is not None
-        done = c_route or c_blocked or c_route_deviation or timeout or c_collision
+
+		
+        done = c_route or c_blocked or c_route_deviation or timeout or c_collision or c_vehicle_stuck
+        terminal_reward = 0.0
+        if done:
+            terminal_reward = -1.0
+        if c_collision:
+            terminal_reward -= ev_speed
         return done, 0, terminal_reward, terminal_debug
 
-    def defeine_reward(self):
+    def defeine_reward(self,terminal_reward):
         ##
         start_time = time.time()
         # function of Carla0.9.14
@@ -702,18 +733,18 @@ class ScenarioManager(object):
 ###
        # print(f"Time for action reward: {time.time() - start_time} seconds") #ok
         # desired_speed reward
-        actor_List = CarlaDataProvider.get_world().get_actors()
-        vehicle_list = actor_List.filter("*vehicle*")
-        walker_list = actor_List.filter("*walker*")
-        lights_list = actor_List.filter("*traffic_light*")
+        # actor_List = CarlaDataProvider.get_world().get_actors()
+        # vehicle_list = actor_List.filter("*vehicle*")
+        # walker_list = actor_List.filter("*walker*")
+       # lights_list = actor_List.filter("*traffic_light*")
        # print(f"Time for actor_List: {time.time() - start_time} seconds")
-        for _actor in actor_List:
-            if 'traffic.stop' in _actor.type_id:
-                self._list_stop_signs.append(_actor)
+       #  for _actor in actor_List:
+       #      if 'traffic.stop' in _actor.type_id:
+       #          self._list_stop_signs.append(_actor)
 
         # refactoring surrounding vehicle and pedestrian recognition
-        nearest_vehicle = self._is_vehicle_hazard(vehicle_list)
-        nearest_walker = self._is_walker_hazard(walker_list)
+        nearest_vehicle = self._is_vehicle_hazard(self.vehicle_list)
+        nearest_walker = self._is_walker_hazard(self.walker_list)
 
       #  print(f"Time for nearest_vehicle: {time.time() - start_time} seconds")
        # nearest_vehicle, min_distance_v = self.get_nearest_vehicle(self.ego_vehicles[0],vehicle_list,max_distance=9.5)
@@ -780,7 +811,6 @@ class ScenarioManager(object):
             ev_transform.rotation.yaw - wp_transform.rotation.yaw)))
         r_rotation = -1.0 * (angle_difference / np.pi)
         r_rotation = -1.0 * angle_difference
-        terminal_reward = 0
         reward = r_speed + r_position + r_rotation + terminal_reward + r_action
         reward_debug = 0
 ##
@@ -858,7 +888,7 @@ class ScenarioManager(object):
         z = self.ego_vehicles[0].get_location().z
         o1 = self._orientation(self.ego_vehicles[0].get_transform().rotation.yaw)
         p1 = self._numpy(self.ego_vehicles[0].get_location())
-        s1 = max(10, 3.0 * np.linalg.norm(self._numpy(self.ego_vehicles[0].get_velocity()))) # increases the threshold distance
+        s1 = 9.5 #roach is 9.5 max(10, 3.0 * np.linalg.norm(self._numpy(self.ego_vehicles[0].get_velocity()))) # increases the threshold distance
         v1_hat = o1
         v1 = s1 * v1_hat
         for target_vehicle in vehicle_list:
