@@ -73,7 +73,14 @@ class CarlaDataProvider(object):  # pylint: disable=too-many-public-methods
     _grp = None
     _runtime_init_flag = False
     _lock = threading.Lock()
+    _ego_vehicle = None
 
+    @staticmethod
+    def get_ego():
+        """
+        Get the CARLA ego
+        """
+        return CarlaDataProvider._ego_vehicle
     @staticmethod
     def register_actor(actor, transform=None):
         """
@@ -885,3 +892,4 @@ class CarlaDataProvider(object):  # pylint: disable=too-many-public-methods
         CarlaDataProvider._rng = random.RandomState(CarlaDataProvider._random_seed)
         CarlaDataProvider._grp = None
         CarlaDataProvider._runtime_init_flag = False
+        CarlaDataProvider._ego_vehicle = None

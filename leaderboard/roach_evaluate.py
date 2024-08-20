@@ -75,7 +75,7 @@ class LeaderboardEvaluator(object):
         # instance is used on all the routes (i.e., the server is not restarted between routes). This is done
         # to avoid reconnection issues between the server and the roslibpy client.
         self._ros1_server = None
-
+        self.episodes = 0
         # Setup the simulation
         self.client, self.client_timeout, self.traffic_manager = self._setup_simulation(args)
 
@@ -176,6 +176,7 @@ class LeaderboardEvaluator(object):
             synchronous_mode = True,
             fixed_delta_seconds = 1.0 / self.frame_rate,
             deterministic_ragdolls = True,
+            spectator_as_ego=False
         )
         client.get_world().apply_settings(settings)
         traffic_manager = client.get_trafficmanager(args.traffic_manager_port)
@@ -295,18 +296,18 @@ class LeaderboardEvaluator(object):
             self.agent_instance.set_global_plan(self.route_scenario.gps_route, self.route_scenario.route)
             self.agent_instance.setup(args.agent_config)
 
-            # Check and store the sensors
-            # if not self.sensors:
-            #     self.sensors = self.agent_instance.sensors()
-            #     track = self.agent_instance.track
-            #
-            #     validate_sensor_configuration(self.sensors, track, args.track)
-            #
-            #     self.sensor_icons = [sensors_to_icons[sensor['type']] for sensor in self.sensors]
-            #     self.statistics_manager.save_sensors(self.sensor_icons)
-            #     self.statistics_manager.write_statistics()
-            #
-            #     self.sensors_initialized = True
+           # Check and store the sensors
+            if not self.sensors:
+                self.sensors = self.agent_instance.sensors()
+                track = self.agent_instance.track
+
+                validate_sensor_configuration(self.sensors, track, args.track)
+
+                self.sensor_icons = [sensors_to_icons[sensor['type']] for sensor in self.sensors]
+                self.statistics_manager.save_sensors(self.sensor_icons)
+                self.statistics_manager.write_statistics()
+
+                self.sensors_initialized = True
 
             self._agent_watchdog.stop()
             self._agent_watchdog = None
@@ -341,7 +342,8 @@ class LeaderboardEvaluator(object):
             # Initialize and return to the initial obs_dict
             obs_dict = self.manager.load_scenario(self.route_scenario, self.agent_instance, config.index, config.repetition_index)
             # Rendering and Interaction
-            self.manager.run_scenario(obs_dict,args.repetitions)
+            self.manager.run_scenario(obs_dict,self.episodes)
+            self.episodes += 1
         except AgentError:
             # The agent has failed -> stop the route
             print("\n\033[91mStopping the route, the agent has crashed:")
@@ -434,7 +436,7 @@ def main():
                         help='Run with debug output',default=0)
     parser.add_argument('--record', type=str, default=False,
                         help='Use CARLA recording feature to create a recording of the scenario')
-    parser.add_argument('--timeout', default=60.0, type=float,
+    parser.add_argument('--timeout', default=300.0, type=float,
                         help='Set the CARLA client timeout value in seconds')
 
     # simulation setup
@@ -442,7 +444,7 @@ def main():
                         help='Name of the routes file to be executed.')
     parser.add_argument('--routes-subset', default='', type=str,
                         help='Execute a specific set of routes')
-    parser.add_argument('--repetitions', type=int, default=1000,
+    parser.add_argument('--repetitions', type=int, default=500,
                         help='Number of repetitions per route.')
 
     # agent-related options

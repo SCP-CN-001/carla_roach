@@ -15,6 +15,7 @@ from __future__ import print_function
 import os
 
 import gym
+import torch
 import torch as th
 import pdb
 import signal
@@ -114,7 +115,7 @@ class ScenarioManager(object):
         self.learning_rate = 1e-5
         self.batch_size = 256
         self.clip_range = 0.2
-
+        self.episodes = 0
         self.vf_coef = 0.5
         self.explore_coef = 0.05
         self.ent_coef = 0.05
@@ -155,9 +156,11 @@ class ScenarioManager(object):
         self._global_plan_gps = []
         self._global_plan_world_coord = []
         self._list_stop_signs = []
-
+        ppo_agent = self.learn_ppo_init(2021, 2021)
         self._proximity_threshold = 50
         self._waypoint_step = 1.0
+        self.info_route_completion = {}
+        self._info_criteria = {}
         # use the callback_id inside the signal handler to allow external interrupts
         signal.signal(signal.SIGINT, self.signal_handler)
         self._route_completed = 0.0
@@ -183,7 +186,7 @@ class ScenarioManager(object):
 
         self.criteria_route_deviation = route_deviation.RouteDeviation()
         self.criteria_blocked = blocked.Blocked()
-        self.repetitions = 0
+       # self.repetitions = 0
 
 
 
@@ -228,6 +231,7 @@ class ScenarioManager(object):
         self.repetition_number = rep_number
 
         self._spectator = CarlaDataProvider.get_world().get_spectator()
+        TrafficLightHandler.reset(CarlaDataProvider.get_world())
         self._map = CarlaDataProvider.get_world().get_map()
         self.criteria_collision = collision.Collision(self.ego_vehicles[0], CarlaDataProvider.get_world())
         self.criteria_light = run_red_light.RunRedLight(self._map)
@@ -242,11 +246,12 @@ class ScenarioManager(object):
 
         self._agent_wrapper.setup_sensors(self.ego_vehicles[0])
         timestep = 0
-        ego_vehicles0 = self.ego_vehicles[0]
+        #ego_vehicles0 = CarlaDataProvider.get_ego()
 
         # obtain raw data (Roach format)
-        obs_instance = ObsManagerHandler(ego_vehicles0)
-        obs_dict = obs_instance.get_observation(timestep)
+        self.obs_instance = ObsManagerHandler(self.ego_vehicles[0])
+        self.obs_instance.reset(self.ego_vehicles[0])
+        obs_dict = self.obs_instance.get_observation(timestep)
 
         # process the observation into standard shape (Roach)
         obs = self.process_obs(obs_dict['hero'], ['control', 'vel_xy'],train=False)
@@ -286,11 +291,12 @@ class ScenarioManager(object):
         model_class = load_entry_point(self._train_cfg['entry_point'])
         ppo_agent = model_class(self._policy, **self._train_cfg['kwargs'])
         return ppo_agent
-    def run_scenario(self,obs_dict,repetitions):
+    def run_scenario(self,obs_dict,episodes):
         """
         Trigger the start of the scenario and wait for it to finish/fail
         """
-        self.repetitions = repetitions
+
+        self.episodes = episodes
         self._trace_route_to_global_target()
         self._last_obs = obs_dict
         self.start_system_time = time.time()
@@ -309,16 +315,24 @@ class ScenarioManager(object):
         # ppoBufferSamples, Thread for build_scenarios
         self._scenario_thread = threading.Thread(target=self.build_scenarios_loop, args=(self._debug_mode > 0, ))
         self._scenario_thread.start()
-        self.buffer.reset()
+       # self.buffer.reset()
 
         # init ppo
-        ppo_agent = self.learn_ppo_init(2021,2021)
+
         self._policy = self._policy.train()
         self._last_dones = np.zeros((1,), dtype=np.bool)
 
         # collect data and learn PPO
         continue_training = self.collect_rollouts(self.buffer, self.n_steps)
         self.train()
+
+        start_time = time.strftime('%Y_%m_%d_%H:_M_%S',time.localtime(time.time()))
+        if self.episodes > 10:
+            model_folder = os.getenv('LEADERBOARD_ROOT')+'/leaderboard/model_pth/' + start_time + '/'
+            if not os.path.exists(model_folder):
+                os.makedirs(model_folder)
+            save_path = os.path.join(model_folder, 'roach_'+str(self.episodes)+'.pth')
+            torch.save(self._policy,save_path)
 
 
     def _tick_scenario(self,ppo_actions,start_timestamp):
@@ -420,7 +434,7 @@ class ScenarioManager(object):
         info_outside_route_lane = self.criteria_outside_route_lane.tick(self.ego_vehicles[0], self._timestamp, self.distance_traveled)
         self.info_route_deviation = self.criteria_route_deviation.tick(
             self.ego_vehicles[0], self._timestamp, self._global_route[0][0], self.distance_traveled, self._route_length)
-        info_route_completion = {
+        self.info_route_completion = {
             'step': self._timestamp['step'],
             'simulation_time': self._timestamp['relative_simulation_time'],
             'route_completed_in_m': self._route_completed,
@@ -428,7 +442,7 @@ class ScenarioManager(object):
             'is_route_completed': route_completed
         }
         self._info_criteria = {
-            'route_completion': info_route_completion,
+            'route_completion': self.info_route_completion,
             'outside_route_lane': info_outside_route_lane,
             'route_deviation': self.info_route_deviation,
             'blocked': info_blocked,
@@ -439,10 +453,13 @@ class ScenarioManager(object):
         }
         reward, reward_debug = self.defeine_reward()
         done, timeout, terminal_reward, terminal_debug = self.define_terminal(start_timestamp)
+        #reward = 0
         timestep = 0
-        ego_vehicles0 = self.ego_vehicles[0]
-        obs_instance = ObsManagerHandler(ego_vehicles0)
-        next_obs_dict = obs_instance.get_observation(timestep)
+
+
+        #ego_vehicles0 = self.ego_vehicles[0]
+        #self.obs_instance = ObsManagerHandler(ego_vehicles0)
+        next_obs_dict = self.obs_instance.get_observation(timestep)
         # roach format observation
         next_obs = self.process_obs(next_obs_dict['hero'], ['control', 'vel_xy'],train=False)
         return next_obs,reward,done
@@ -452,10 +469,12 @@ class ScenarioManager(object):
         rollout_buffer.reset()
         done = False
         total_reward = 0
-        self.count = 0
-        # collect rollouts
+
+        # collect rollouts   run_step
         while  n_steps < n_rollout_steps:
             ppo_actions, values, log_probs, mu, sigma, _ = self._policy.forward(self._last_obs)
+            #values = log_probs = mu = sigma = 0.5
+           # ppo_actions = [[0.5,0.0]]
             start_timestamp = CarlaDataProvider.get_world().get_snapshot().timestamp
 
             # ppo interacts with the environment
@@ -466,12 +485,19 @@ class ScenarioManager(object):
             self._last_dones = done
             # terminate this step
             if self._last_dones:
+                self.obs_instance.clean()
+               # self.criteria_blocked.clean()
+                self.criteria_collision.clean()
+              #  self.criteria_light.clean()
+          #      self.criteria_stop.clean()
+              #  self.criteria_outside_route_lane.clean()
+             #   self.criteria_route_deviation.clean()
                 break
             total_reward += rewards
-            self.count += 1
+
             n_steps += 1
-        writer.add_scalar('reward/reward_episode',total_reward,self.repetitions)
-        print(f"{self.repetitions}total_reward:{total_reward}")
+        writer.add_scalar('reward/reward_episode',total_reward,self.episodes)
+        print(f"{self.episodes}total_reward:{total_reward}")
         # update ppo
         last_values = self._policy.forward_value(self._last_obs)
         self.buffer.compute_returns_and_advantage(last_values, dones=self._last_dones)
@@ -479,25 +505,38 @@ class ScenarioManager(object):
         return True
     def process_obs(self,obs, input_states, train=True):
 
+        # if 'speed' in input_states:
+        #     state_list.append(obs['speed']['speed_xy'])
+        # if 'speed_limit' in input_states:
+        #     state_list.append(obs['control']['speed_limit'])
+        # if 'control' in input_states:
+        #     state_list.append(obs['control']['throttle'])
+        #     state_list.append(obs['control']['steer'])
+        #     state_list.append(obs['control']['brake'])
+        #     state_list.append(obs['control']['gear'] / 5.0)
+        # if 'acc_xy' in input_states:
+        #     state_list.append(obs['velocity']['acc_xy'])
+        # if 'vel_xy' in input_states:
+        #     state_list.append(obs['velocity']['vel_xy'])
+        # if 'vel_ang_z' in input_states:
+        #     state_list.append(obs['velocity']['vel_ang_z'])
         state_list = []
-        if 'speed' in input_states:
-            state_list.append(obs['speed']['speed_xy'])
-        if 'speed_limit' in input_states:
-            state_list.append(obs['control']['speed_limit'])
-        if 'control' in input_states:
-            state_list.append(obs['control']['throttle'])
-            state_list.append(obs['control']['steer'])
-            state_list.append(obs['control']['brake'])
-            state_list.append(obs['control']['gear']/5.0)
-        if 'acc_xy' in input_states:
-            state_list.append(obs['velocity']['acc_xy'])
-        if 'vel_xy' in input_states:
-            state_list.append(obs['velocity']['vel_xy'])
-        if 'vel_ang_z' in input_states:
-            state_list.append(obs['velocity']['vel_ang_z'])
-
+        control = self.ego_vehicles[0].get_control()
+        throttle = np.array([control.throttle], dtype=np.float32)
+        steer = np.array([control.steer], dtype=np.float32)
+        brake = np.array([control.brake], dtype=np.float32)
+        gear = np.array([control.gear], dtype=np.float32)
+        ev_transform = self.ego_vehicles[0].get_transform()
+        vel_w = self.ego_vehicles[0].get_velocity()
+        vel_ev = trans_utils.vec_global_to_ref(vel_w, ev_transform.rotation)
+        vel_xy = np.array([vel_ev.x, vel_ev.y], dtype=np.float32)
+        state_list.append(throttle)
+        state_list.append(steer)
+        state_list.append(brake)
+        state_list.append(gear)
+        state_list.append(vel_xy)
         state = np.concatenate(state_list)
-
+       # pdb.set_trace()
         birdview = obs['birdview']['masks']
 
         if not train:
@@ -565,15 +604,15 @@ class ScenarioManager(object):
 
                 loss = policy_loss + self.vf_coef * value_loss \
                     + self.ent_coef * entropy_loss + self.explore_coef * exploration_loss
-                writer.add_scalar('loss_all//episodes', loss.item(), self.repetitions)
+                writer.add_scalar('loss_all//episodes', loss.item(), self.episodes)
              #   losses.append(loss.item())
                 # Detection policy update
                 if i % 400 == 0:
                     print(f"policy_loss:{loss}")
-                writer.add_scalar('policy_loss/episodes', policy_loss.item(), self.repetitions)
-                writer.add_scalar('value_loss/episodes', value_loss.item(), self.repetitions)
-                writer.add_scalar('entropy_loss/episodes', entropy_loss.item(), self.repetitions)
-                writer.add_scalar('exploration_loss/episodes', exploration_loss.item(), self.repetitions)
+                writer.add_scalar('policy_loss/episodes', policy_loss.item(),self.episodes)
+                writer.add_scalar('value_loss/episodes', value_loss.item(), self.episodes)
+                writer.add_scalar('entropy_loss/episodes', entropy_loss.item(), self.episodes)
+                writer.add_scalar('exploration_loss/episodes', exploration_loss.item(), self.episodes)
                 # pg_losses.append(policy_loss.item())
                 # value_losses.append(value_loss.item())
                 # entropy_losses.append(entropy_loss.item())
@@ -591,7 +630,7 @@ class ScenarioManager(object):
                     old_distribution = self._policy.action_dist.proba_distribution(
                         1, 1)
                     kl_div = th.distributions.kl_divergence(old_distribution.distribution, distribution)
-                writer.add_scalar('approx_kl_divs/episodes', kl_div.mean().item(), self.repetitions)
+                writer.add_scalar('approx_kl_divs/episodes', kl_div.mean().item(),self.episodes)
                 approx_kl_divs.append(kl_div.mean().item())
 
             if self.target_kl is not None and np.mean(approx_kl_divs) > 1.5 * self.target_kl:
@@ -629,11 +668,12 @@ class ScenarioManager(object):
         # Done condition 1: route completed
         c_route = self._info_criteria['route_completion']['is_route_completed']
         # Done condition 2: blocked
+        # Done condition 2: blocked
         c_blocked = self._info_criteria['blocked'] is not None
         # Done condition 3: route_deviation
         c_route_deviation = self._info_criteria['route_deviation'] is not None
         # Done condition 4: timeout
-        self._max_time = 500
+        self._max_time = 300 #80 #50
         if self._max_time is not None:
             timeout = self._timestamp['relative_simulation_time'] > self._max_time
         else:
@@ -644,36 +684,46 @@ class ScenarioManager(object):
         return done, 0, terminal_reward, terminal_debug
 
     def defeine_reward(self):
+        ##
+        start_time = time.time()
         # function of Carla0.9.14
         ev_transform = self.ego_vehicles[0].get_transform()
         ev_control = self.ego_vehicles[0].get_control()
         ev_vel = self.ego_vehicles[0].get_velocity()
         ev_speed = np.linalg.norm(np.array([ev_vel.x, ev_vel.y]))
+        ##
+     #   print(f"Time for getting transform: {time.time() - start_time} seconds") #ok
         # action reward
         if abs(ev_control.steer - self._last_steer) > 0.01:
             r_action = -0.1
         else:
             r_action = 0.0
         self._last_steer = ev_control.steer
-
+###
+       # print(f"Time for action reward: {time.time() - start_time} seconds") #ok
         # desired_speed reward
         actor_List = CarlaDataProvider.get_world().get_actors()
         vehicle_list = actor_List.filter("*vehicle*")
         walker_list = actor_List.filter("*walker*")
         lights_list = actor_List.filter("*traffic_light*")
+       # print(f"Time for actor_List: {time.time() - start_time} seconds")
         for _actor in actor_List:
             if 'traffic.stop' in _actor.type_id:
                 self._list_stop_signs.append(_actor)
 
         # refactoring surrounding vehicle and pedestrian recognition
-        nearest_vehicle, min_distance_v = self.get_nearest_vehicle(self.ego_vehicles[0],vehicle_list,max_distance=9.5)
-        nearest_walker, min_distance_w = self.get_nearest_vehicle(self.ego_vehicles[0],walker_list,max_distance=9.5)
-        TrafficLightHandler.reset(CarlaDataProvider.get_world())
+        nearest_vehicle = self._is_vehicle_hazard(vehicle_list)
+        nearest_walker = self._is_walker_hazard(walker_list)
+
+      #  print(f"Time for nearest_vehicle: {time.time() - start_time} seconds")
+       # nearest_vehicle, min_distance_v = self.get_nearest_vehicle(self.ego_vehicles[0],vehicle_list,max_distance=9.5)
+       # nearest_walker, min_distance_w = self.get_nearest_vehicle(self.ego_vehicles[0],walker_list,max_distance=9.5)
+
 
         light_state, light_loc, _ = TrafficLightHandler.get_light_state(self.ego_vehicles[0],
                                                          offset=self._tl_offset, dist_threshold=18.0)
         desired_spd_veh = desired_spd_ped = desired_spd_rl = desired_spd_stop = self._maxium_speed
-
+      #  print(f"Time for TrafficLightHandler: {time.time() - start_time} seconds")
         # find the nearest vehicle in lower 9.5
         if nearest_vehicle is not None:  #if have risk
             dist_veh = max(0.0, np.linalg.norm([nearest_vehicle.get_transform().location.x,nearest_vehicle.get_transform().location.y])-8.0)
@@ -682,25 +732,30 @@ class ScenarioManager(object):
         if nearest_walker is not None:
             dist_ped = max(0.0, np.linalg.norm([nearest_walker.get_transform().location.x,nearest_walker.get_transform().location.y])-6.0)
             desired_spd_ped = self._maxium_speed * np.clip(dist_ped, 0.0, 5.0)/5.0
+
+      #  print(f"Time for if nearest_walker is not None: {time.time() - start_time} seconds")
         # traffic light
         if (light_state == carla.TrafficLightState.Red or light_state == carla.TrafficLightState.Yellow):
             dist_rl = max(0.0, np.linalg.norm(light_loc[0:2])-5.0)
             desired_spd_rl = self._maxium_speed * np.clip(dist_rl, 0.0, 5.0)/5.0
-
+      #  print(f"Time for traffic light: {time.time() - start_time} seconds")
         # stop sign
-        stop_sign = self._scan_for_stop_sign(ev_transform)
-        stop_loc = None
-        # reconstructingstop sign to intervene in ego
-        if (stop_sign is not None):
-            trans = stop_sign.get_transform()
-            tv_loc = stop_sign.trigger_volume.location
-            loc_in_world = trans.transform(tv_loc)
-            loc_in_ev = trans_utils.loc_global_to_ref(loc_in_world, ev_transform)
-            stop_loc = np.array([loc_in_ev.x, loc_in_ev.y, loc_in_ev.z], dtype=np.float32)
-            dist_stop = max(0.0, np.linalg.norm(stop_loc[0:2])-5.0)
-            desired_spd_stop = self._maxium_speed * np.clip(dist_stop, 0.0, 5.0)/5.0
-
+        # stop_sign = self._scan_for_stop_sign(ev_transform)
+        # print(f"Time for stop sign: {time.time() - start_time} seconds")
+        # stop_loc = None
+        # # reconstructingstop sign to intervene in ego
+        # if (stop_sign is not None):
+        #     trans = stop_sign.get_transform()
+        #     tv_loc = stop_sign.trigger_volume.location
+        #     loc_in_world = trans.transform(tv_loc)
+        #     loc_in_ev = trans_utils.loc_global_to_ref(loc_in_world, ev_transform)
+        #     stop_loc = np.array([loc_in_ev.x, loc_in_ev.y, loc_in_ev.z], dtype=np.float32)
+        #     dist_stop = max(0.0, np.linalg.norm(stop_loc[0:2])-5.0)
+        #     desired_spd_stop = self._maxium_speed * np.clip(dist_stop, 0.0, 5.0)/5.0
+       # print(f"Time for if (stop_sign is not None): {time.time() - start_time} seconds")
         desired_speed = min(self._maxium_speed, desired_spd_veh, desired_spd_ped, desired_spd_rl, desired_spd_stop)
+###
+      #  print(f"Time for desired_speed reward: {time.time() - start_time} seconds")
         # desired_speed reward
         if ev_speed > self._maxium_speed:
             r_speed = 1.0 - np.abs(ev_speed-desired_speed) / self._maxium_speed
@@ -717,7 +772,9 @@ class ScenarioManager(object):
 
         lateral_distance = np.abs(np.dot(np_wp_unit_right, np_d_vec))
         r_position = -1.0 * (lateral_distance / 2.0)
+###
 
+     #   print(f"Time for r_position reward: {time.time() - start_time} seconds")
         # r_rotation reward
         angle_difference = np.deg2rad(np.abs(trans_utils.cast_angle(
             ev_transform.rotation.yaw - wp_transform.rotation.yaw)))
@@ -726,6 +783,8 @@ class ScenarioManager(object):
         terminal_reward = 0
         reward = r_speed + r_position + r_rotation + terminal_reward + r_action
         reward_debug = 0
+##
+      #  print(f"Time for r_rotation reward: {time.time() - start_time} seconds")
         return reward, reward_debug
     def get_running_status(self):
         """
@@ -762,6 +821,73 @@ class ScenarioManager(object):
 
         return nearest_vehicle, min_distance
 
+    def _numpy(self,carla_vector, normalize=False):
+        result = np.float32([carla_vector.x, carla_vector.y])
+        if normalize:
+            return result / (np.linalg.norm(result) + 1e-4)
+        return result
+    def _orientation(self,yaw):
+        return np.float32([np.cos(np.radians(yaw)), np.sin(np.radians(yaw))])
+
+    def get_collision(self,p1, v1, p2, v2):
+        A = np.stack([v1, -v2], 1)
+        b = p2 - p1
+        if abs(np.linalg.det(A)) < 1e-3:
+            return False, None
+        x = np.linalg.solve(A, b)
+        collides = all(x >= 0) and all(x <= 1)  # how many seconds until collision
+
+        return collides, p1 + x[0] * v1
+    def _is_walker_hazard(self, walkers_list):
+        z = self.ego_vehicles[0].get_location().z
+        p1 = self._numpy(self.ego_vehicles[0].get_location())
+        v1 = 10.0 * self._orientation(self.ego_vehicles[0].get_transform().rotation.yaw)
+
+        for walker in walkers_list:
+            v2_hat = self._orientation(walker.get_transform().rotation.yaw)
+            s2 = np.linalg.norm(self._numpy(walker.get_velocity()))
+            if s2 < 0.05:
+                v2_hat *= s2
+            p2 = -3.0 * v2_hat + self._numpy(walker.get_location())
+            v2 = 8.0 * v2_hat
+            collides, collision_point = self.get_collision(p1, v1, p2, v2)
+            if collides:
+                return walker
+        return None
+    def _is_vehicle_hazard(self, vehicle_list):
+        z = self.ego_vehicles[0].get_location().z
+        o1 = self._orientation(self.ego_vehicles[0].get_transform().rotation.yaw)
+        p1 = self._numpy(self.ego_vehicles[0].get_location())
+        s1 = max(10, 3.0 * np.linalg.norm(self._numpy(self.ego_vehicles[0].get_velocity()))) # increases the threshold distance
+        v1_hat = o1
+        v1 = s1 * v1_hat
+        for target_vehicle in vehicle_list:
+            if target_vehicle.id == self.ego_vehicles[0].id:
+                continue
+            o2 = self._orientation(target_vehicle.get_transform().rotation.yaw)
+            p2 = self._numpy(target_vehicle.get_location())
+            s2 = max(5.0, 2.0 * np.linalg.norm(self._numpy(target_vehicle.get_velocity())))
+            v2_hat = o2
+            v2 = s2 * v2_hat
+            p2_p1 = p2 - p1
+            distance = np.linalg.norm(p2_p1)
+            p2_p1_hat = p2_p1 / (distance + 1e-4)
+
+            angle_to_car = np.degrees(np.arccos(v1_hat.dot(p2_p1_hat)))
+            angle_between_heading = np.degrees(np.arccos(o1.dot(o2)))
+
+            # to consider -ve angles too
+            angle_to_car = min(angle_to_car, 360.0 - angle_to_car)
+            angle_between_heading = min(angle_between_heading, 360.0 - angle_between_heading)
+
+            if angle_between_heading > 60.0 and not (angle_to_car < 15 and distance < s1):
+                continue
+            elif angle_to_car > 30.0:
+                continue
+            elif distance > s1:
+                continue
+            return target_vehicle
+        return None
     def stop_scenario(self):
         """
         This function triggers a proper termination of a scenario

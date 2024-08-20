@@ -83,9 +83,10 @@ class ObsManager_bird(ObsManagerBase):
 
     def attach_ego_vehicle(self, parent_actor):
         self._parent_actor = parent_actor
-        self._world = self._parent_actor.vehicle.get_world()
-
-        maps_h5_path = self._map_dir / (self._world.get_map().name + '.h5')
+        self._world = self._parent_actor.get_world()
+      #  self._world = self._parent_actor.vehicle.get_world()
+        maps_h5_path = "/home/vci-1/XT/carla_Roach/carla-roach/carla_gym/core/obs_manager/birdview/maps/Town12.h5"
+        #maps_h5_path = self._map_dir / (self._world.get_map().name + '.h5')
         with h5py.File(maps_h5_path, 'r', libver='latest', swmr=True) as hf:
             self._road = np.array(hf['road'], dtype=np.uint8)
             self._lane_marking_all = np.array(hf['lane_marking_all'], dtype=np.uint8)
@@ -98,6 +99,7 @@ class ObsManager_bird(ObsManagerBase):
             # self._lane_marking_white_solid = np.array(hf['lane_marking_white_solid'], dtype=np.uint8)
 
             self._world_offset = np.array(hf.attrs['world_offset_in_meters'], dtype=np.float32)
+            print(f"{self._pixels_per_meter}::!!::{float(hf.attrs['pixels_per_meter'])}")
             assert np.isclose(self._pixels_per_meter, float(hf.attrs['pixels_per_meter']))
 
         self._distance_threshold = np.ceil(self._width / self._pixels_per_meter)
@@ -334,3 +336,4 @@ class ObsManager_bird(ObsManagerBase):
         self._parent_actor = None
         self._world = None
         self._history_queue.clear()
+

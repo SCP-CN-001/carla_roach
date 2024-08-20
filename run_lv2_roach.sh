@@ -1,6 +1,7 @@
  #!/bin/bash
-LEADERBOARD_ROOT="Your leaderboard path"
-export Carla_root="Your CARLA_0.9.14 path"
+LEADERBOARD_ROOT="/home/vci-1/XT/leaderV2/leaderboard"
+export LEADERBOARD_ROOT="/home/vci-1/XT/leaderV2/leaderboard"
+export Carla_root="/home/vci-1/XT/CARLA_0.9.14/"
 export TEAM_AGENT=$LEADERBOARD_ROOT/leaderboard/autoagents/human_agent.py
 export ROUTES=$LEADERBOARD_ROOT/data/routes_training.xml
 export ROUTES_SUBSET=0
