@@ -180,7 +180,7 @@ class ScenarioManager(object):
 
         # V2 waypoints
         target_transforms = self.route_configurations[1:] #not contain start_point
-        self._vehicle_stuck_step = 100
+        self._vehicle_stuck_step = 5#100
         self._vehicle_stuck_counter = 0
         self._speed_queue = deque(maxlen=10)
         # roach waypoints
@@ -228,7 +228,8 @@ class ScenarioManager(object):
         self.criteria_encounter_light = None
         self.criteria_stop = None
         self.criteria_outside_route_lane = None
-
+        self._speed_queue.clear()
+        self._vehicle_stuck_counter = 0
     def load_scenario(self, scenario, agent, route_index, rep_number):
         """
         Load a new scenario
@@ -494,7 +495,8 @@ class ScenarioManager(object):
         while  n_steps < n_rollout_steps:
             ppo_actions, values, log_probs, mu, sigma, _ = self._policy.forward(self._last_obs)
             #values = log_probs = mu = sigma = 0.5
-           # ppo_actions = [[0.5,0.0]]
+           # ppo_actions[0][0] = 0.2 #[[0.5,0.0]]
+            ppo_actions = [[0.2,-0.15]]
             start_timestamp = CarlaDataProvider.get_world().get_snapshot().timestamp
 
             # ppo interacts with the environment
@@ -696,7 +698,9 @@ class ScenarioManager(object):
         is_free_road = (hazard_vehicle_loc is None) and (hazard_ped_loc is None) \
             and (light_state is None or light_state == carla.TrafficLightState.Green)
         c_vehicle_stuck = self._vehicle_stuck_counter >= self._vehicle_stuck_step
-        if is_free_road and np.mean(self._speed_queue) < 1.0:
+        print(f"self._speed_queue:{self._speed_queue}")
+        print(f"self._vehicle_stuck_counter:{self._vehicle_stuck_counter}")
+        if is_free_road and np.mean(self._speed_queue) < 10:#1.0:
             self._vehicle_stuck_counter += 1
         if np.mean(self._speed_queue) >= 1.0:
             self._vehicle_stuck_counter = 0
@@ -715,13 +719,23 @@ class ScenarioManager(object):
             timeout = False
         # Done condition 5: collisionc
         c_collision = self._info_criteria['collision'] is not None
+        if c_route:
+            print(f"\033[1m> DONE Fail_c_route:{c_route}\033[0m")
+        if c_blocked:
+            print(f"\033[1m> DONE Fail_c_blocked:{c_blocked}\033[0m")
+        if c_route_deviation:
+            print(f"\033[1m> DONE Fail_c_route_deviation:{c_route_deviation}\033[0m")
+        if timeout:
+            print(f"\033[1m> DONE Fail_timeout:{timeout}\033[0m")
+        if c_vehicle_stuck:
+            print(f"\033[1m> DONE Fail_c_vehicle_stuck:{c_vehicle_stuck}\033[0m")
 
-		
         done = c_route or c_blocked or c_route_deviation or timeout or c_collision or c_vehicle_stuck
         terminal_reward = 0.0
         if done:
             terminal_reward = -1.0
         if c_collision:
+            print(f"\033[1m> DONE Fail_c_collision:{c_collision}\033[0m")
             terminal_reward -= ev_speed
         return done, 0, terminal_reward, terminal_debug
 
@@ -768,8 +782,14 @@ class ScenarioManager(object):
       #  print(f"Time for TrafficLightHandler: {time.time() - start_time} seconds")
         # find the nearest vehicle in lower 9.5
         if nearest_vehicle is not None:  #if have risk
-            dist_veh = max(0.0, np.linalg.norm([nearest_vehicle.get_transform().location.x,nearest_vehicle.get_transform().location.y])-8.0)
+            nearest_vehicle_location = nearest_vehicle.get_location()
+            distance = self.ego_vehicles[0].get_location().distance(nearest_vehicle_location)
+            dist_veh = max(0.0, abs(distance-8.0))
             desired_spd_veh = self._maxium_speed * np.clip(dist_veh, 0.0, 5.0)/5.0
+            # print(f"nearest:{nearest_vehicle_location}")
+            # print(f"distancedistance:{distance}")
+            # print(f"dist_veh:{dist_veh}")
+            # print(f"desired_spd_veh:{desired_spd_veh}")
 
         if nearest_walker is not None:
             dist_ped = max(0.0, np.linalg.norm([nearest_walker.get_transform().location.x,nearest_walker.get_transform().location.y])-6.0)
@@ -799,12 +819,10 @@ class ScenarioManager(object):
 ###
       #  print(f"Time for desired_speed reward: {time.time() - start_time} seconds")
         # desired_speed reward
-        print(f"desired_spd_veh:{desired_spd_veh}")
-        print(f"desired_spd_ped:{desired_spd_ped}")
-        print(f"desired_spd_rl:{desired_spd_rl}")
-        print(f"desired_spd_stop:{desired_spd_stop}")
-        print(f"self._maxium_speed:{self._maxium_speed}")
-        print(f"desired_speed:{desired_speed}")
+
+        # print(f"desired_spd_veh:{desired_spd_veh}")
+        # print(f"desired_spd_ped:{desired_spd_ped}")
+        # print(f"desired_speed:{desired_speed}")
 
         if ev_speed > self._maxium_speed:
             r_speed = 1.0 - np.abs(ev_speed-desired_speed) / self._maxium_speed
@@ -813,32 +831,29 @@ class ScenarioManager(object):
 
         # r_position reward
         wp_transform = self.get_route_transform()
-        print(f"wp_transform:{wp_transform}")
-        print(f"ev_transform:{ev_transform}")
+
         d_vec = ev_transform.location - wp_transform.location
         np_d_vec = np.array([d_vec.x, d_vec.y], dtype=np.float32)
         wp_unit_forward = wp_transform.rotation.get_forward_vector()
         np_wp_unit_right = np.array([-wp_unit_forward.y, wp_unit_forward.x], dtype=np.float32)
-        print(f"np_wp_unit_right:{np_wp_unit_right}")
-        print(f"np_d_vec:{np_d_vec}")
+
         lateral_distance = np.abs(np.dot(np_wp_unit_right, np_d_vec))
-        print(f"lateral_distance:{lateral_distance}")
+
         r_position = -1.0 * (lateral_distance / 2.0)
 ###
 
-     #   print(f"Time for r_position reward: {time.time() - start_time} seconds")
+
         # r_rotation reward
         angle_difference = np.deg2rad(np.abs(trans_utils.cast_angle(
             ev_transform.rotation.yaw - wp_transform.rotation.yaw)))
-        print(f"angle_difference:{angle_difference}")
+       # print(f"ev_transform.rotation.yaw:{ev_transform.rotation.yaw}")
+       # print(f"wp_transform.rotation.yaw:{wp_transform.rotation.yaw}")
         r_rotation = -1.0 * (angle_difference / np.pi)
         r_rotation = -1.0 * angle_difference
-
         reward = r_speed + r_position + r_rotation + terminal_reward + r_action
         print(f"reward:{reward}//r_speed:{r_speed}//r_position:{r_position}//r_rotation:{r_rotation}//terminal_reward:{terminal_reward}//r_action:{r_action}")
         reward_debug = 0
 ##
-      #  print(f"Time for r_rotation reward: {time.time() - start_time} seconds")
         return reward, reward_debug
     def get_running_status(self):
         """
@@ -912,7 +927,7 @@ class ScenarioManager(object):
         z = self.ego_vehicles[0].get_location().z
         o1 = self._orientation(self.ego_vehicles[0].get_transform().rotation.yaw)
         p1 = self._numpy(self.ego_vehicles[0].get_location())
-        s1 = 9.5 #roach is 9.5 max(10, 3.0 * np.linalg.norm(self._numpy(self.ego_vehicles[0].get_velocity()))) # increases the threshold distance
+        s1 = 9.5 #roach is 9.5, max(10, 3.0 * np.linalg.norm(self._numpy(self.ego_vehicles[0].get_velocity()))) # increases the threshold distance
         v1_hat = o1
         v1 = s1 * v1_hat
         for target_vehicle in vehicle_list:
