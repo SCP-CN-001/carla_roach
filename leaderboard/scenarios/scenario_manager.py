@@ -219,6 +219,15 @@ class ScenarioManager(object):
         self._spectator = None
         self._watchdog = None
         self._agent_watchdog = None
+        self.actor_List = None
+        self.vehicle_list = None
+        self.walker_list = None
+        self._map = None
+        self.criteria_collision = None
+        self.criteria_light = None
+        self.criteria_encounter_light = None
+        self.criteria_stop = None
+        self.criteria_outside_route_lane = None
 
     def load_scenario(self, scenario, agent, route_index, rep_number):
         """
@@ -245,6 +254,7 @@ class ScenarioManager(object):
         self.criteria_encounter_light = encounter_light.EncounterLight()
         self.criteria_stop = run_stop_sign.RunStopSign(CarlaDataProvider.get_world())
         self.criteria_outside_route_lane = outside_route_lane.OutsideRouteLane(self._map, self.ego_vehicles[0].get_location())
+        self._last_route_location = self.ego_vehicles[0].get_location()
 
         # global planner of Carla0.9.14
         self._planner = GlobalRoutePlanner(self._map,1.0)
@@ -389,7 +399,7 @@ class ScenarioManager(object):
                 ego_action_init_ppo.throttle = np.float(abs(ppo_actions[0][0]))
                 ego_action_init_ppo.brake = np.float(0)
             else:
-                ego_action_init_ppo.brake = 0.5 * np.float(abs(ppo_actions[0][0]))
+                ego_action_init_ppo.brake = 0.3 * np.float(abs(ppo_actions[0][0]))
                 ego_action_init_ppo.throttle = np.float(0)
             #steer
             ego_action_init_ppo.steer = np.float(ppo_actions[0][1])
@@ -496,8 +506,9 @@ class ScenarioManager(object):
             # terminate this step
             if self._last_dones:
                 self.obs_instance.clean()
-               # self.criteria_blocked.clean()
                 self.criteria_collision.clean()
+               # self.criteria_blocked.clean()
+
               #  self.criteria_light.clean()
           #      self.criteria_stop.clean()
               #  self.criteria_outside_route_lane.clean()
@@ -731,8 +742,8 @@ class ScenarioManager(object):
             r_action = 0.0
         self._last_steer = ev_control.steer
 ###
-       # print(f"Time for action reward: {time.time() - start_time} seconds") #ok
-        # desired_speed reward
+       # print(f"Time for action reward: {time.time() - start_ti me} seconds") #ok
+        # desired_speed reward  setting up the
         # actor_List = CarlaDataProvider.get_world().get_actors()
         # vehicle_list = actor_List.filter("*vehicle*")
         # walker_list = actor_List.filter("*walker*")
@@ -788,6 +799,13 @@ class ScenarioManager(object):
 ###
       #  print(f"Time for desired_speed reward: {time.time() - start_time} seconds")
         # desired_speed reward
+        print(f"desired_spd_veh:{desired_spd_veh}")
+        print(f"desired_spd_ped:{desired_spd_ped}")
+        print(f"desired_spd_rl:{desired_spd_rl}")
+        print(f"desired_spd_stop:{desired_spd_stop}")
+        print(f"self._maxium_speed:{self._maxium_speed}")
+        print(f"desired_speed:{desired_speed}")
+
         if ev_speed > self._maxium_speed:
             r_speed = 1.0 - np.abs(ev_speed-desired_speed) / self._maxium_speed
         else:
@@ -795,13 +813,16 @@ class ScenarioManager(object):
 
         # r_position reward
         wp_transform = self.get_route_transform()
-
+        print(f"wp_transform:{wp_transform}")
+        print(f"ev_transform:{ev_transform}")
         d_vec = ev_transform.location - wp_transform.location
         np_d_vec = np.array([d_vec.x, d_vec.y], dtype=np.float32)
         wp_unit_forward = wp_transform.rotation.get_forward_vector()
         np_wp_unit_right = np.array([-wp_unit_forward.y, wp_unit_forward.x], dtype=np.float32)
-
+        print(f"np_wp_unit_right:{np_wp_unit_right}")
+        print(f"np_d_vec:{np_d_vec}")
         lateral_distance = np.abs(np.dot(np_wp_unit_right, np_d_vec))
+        print(f"lateral_distance:{lateral_distance}")
         r_position = -1.0 * (lateral_distance / 2.0)
 ###
 
@@ -809,9 +830,12 @@ class ScenarioManager(object):
         # r_rotation reward
         angle_difference = np.deg2rad(np.abs(trans_utils.cast_angle(
             ev_transform.rotation.yaw - wp_transform.rotation.yaw)))
+        print(f"angle_difference:{angle_difference}")
         r_rotation = -1.0 * (angle_difference / np.pi)
         r_rotation = -1.0 * angle_difference
+
         reward = r_speed + r_position + r_rotation + terminal_reward + r_action
+        print(f"reward:{reward}//r_speed:{r_speed}//r_position:{r_position}//r_rotation:{r_rotation}//terminal_reward:{terminal_reward}//r_action:{r_action}")
         reward_debug = 0
 ##
       #  print(f"Time for r_rotation reward: {time.time() - start_time} seconds")
@@ -1039,10 +1063,10 @@ class ScenarioManager(object):
 
         return am_ab > 0 and am_ab < ab_ab and am_ad > 0 and am_ad < ad_ad
     def get_route_transform(self):
-        last_route_location = self.ego_vehicles[0].get_location()
-        loc0 = last_route_location
-        loc1 = self._global_route[0][0].transform.location
 
+        loc0 = self._last_route_location
+        loc1 = self._global_route[0][0].transform.location
+        print(f"loc1:{loc1}")
         if loc1.distance(loc0) < 0.1:
             yaw = self._global_route[0][0].transform.rotation.yaw
         else:
