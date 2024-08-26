@@ -520,8 +520,9 @@ class CarlaDataProvider(object):  # pylint: disable=too-many-public-methods
             if attribute_filter is not None:
                 for key, value in attribute_filter.items():
                     blueprints = [x for x in blueprints if check_attribute_value(x, key, value)]
+           # print(f"blueprints:{blueprints}")
+            blueprint = blueprints[0] #CarlaDataProvider._rng.choice(blueprints)
 
-            blueprint = CarlaDataProvider._rng.choice(blueprints)
         except ValueError:
             # The model is not part of the blueprint library. Let's take a default one for the given category
             bp_filter = "vehicle.*"
@@ -618,6 +619,7 @@ class CarlaDataProvider(object):  # pylint: disable=too-many-public-methods
             _spawn_point.location.x = spawn_point.location.x
             _spawn_point.location.y = spawn_point.location.y
             _spawn_point.location.z = spawn_point.location.z + z_offset
+            print(f"blueprint:{blueprint}---_spawn_point:{_spawn_point}")
             actor = CarlaDataProvider._world.try_spawn_actor(blueprint, _spawn_point)
 
         if actor is None:

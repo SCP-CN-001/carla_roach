@@ -10,7 +10,8 @@ from stable_baselines3.common.vec_env import VecEnv
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.utils import explained_variance
 import sys
-sys.path.append("/home/vci-1/XT/carla_Roach_beifen/carla-roach/agents/rl_birdview/models")
+sys.path.append("/home/vci-1/XT/leaderV2/leaderboard_resetting/leaderboard/rl_birdview/models")
+#sys.path.append("/home/vci-1/XT/carla_Roach_beifen/carla-roach/agents/rl_birdview/models")
 from ppo_buffer import PpoBuffer
 
 

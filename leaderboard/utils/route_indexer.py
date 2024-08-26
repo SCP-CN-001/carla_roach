@@ -35,12 +35,13 @@ class RouteIndexer():
     def peek(self):
         return self.index < self.total
 
-    def get_next_config(self):
+    def get_next_config(self,next_route):
         if self.index >= self.total:
             return None
 
         config = self._configs_list[self.index]
-        self.index += 1
+        if next_route:
+            self.index += 1
 
         return config
 

@@ -42,7 +42,8 @@ from .gym_utils import transforms as trans_utils
 from ..rl_birdview.models.ppo_buffer import PpoBuffer
 from .gym_utils.config_utils import load_entry_point
 # add Carla 0.9.14 path
-sys.path.append(os.getenv('Carla_root') + "/PythonAPI/carla/agents/navigation/")
+Carla_root="/home/vci-1/XT/leaderboard_roach0818/ramble/roach_v2/CARLA_Leaderboard_2.0/CARLA_Leaderboard_20/"
+sys.path.append(Carla_root + "PythonAPI/carla/agents/navigation/")
 # global planner of Carla0.9.14
 from global_route_planner import GlobalRoutePlanner
 from route_manipulation import location_route_to_gps,downsample_route
@@ -80,7 +81,7 @@ class ScenarioManager(object):
         self.scenario_tree = None
         self.ego_vehicles = None
         self.other_actors = None
-
+        self._about_to_stop = False
         self._debug_mode = debug_mode
         self._agent_wrapper = None
         self._running = False
@@ -180,7 +181,7 @@ class ScenarioManager(object):
 
         # V2 waypoints
         target_transforms = self.route_configurations[1:] #not contain start_point
-        self._vehicle_stuck_step = 5#100
+        self._vehicle_stuck_step = 100 #100
         self._vehicle_stuck_counter = 0
         self._speed_queue = deque(maxlen=10)
         # roach waypoints
@@ -204,7 +205,7 @@ class ScenarioManager(object):
             raise RuntimeError("The simulation took longer than {}s to update".format(self._timeout))
         self._running = False
 
-    def cleanup(self):
+    def cleanup(self,reload=True):
         """
         Reset all parameters
         """
@@ -215,10 +216,15 @@ class ScenarioManager(object):
         self.start_game_time = 0.0
         self.end_system_time = 0.0
         self.end_game_time = 0.0
-
-        self._spectator = None
-        self._watchdog = None
-        self._agent_watchdog = None
+        if reload:
+            self._spectator = None
+            self._watchdog = None
+            self._agent_watchdog = None
+        else:
+            self._running = False
+            self._scenario_thread.join()
+            self.scenario.build_scenarios(self.ego_vehicles[0])
+            CarlaDataProvider.set_runtime_init_mode(True)
         self.actor_List = None
         self.vehicle_list = None
         self.walker_list = None
@@ -230,6 +236,15 @@ class ScenarioManager(object):
         self.criteria_outside_route_lane = None
         self._speed_queue.clear()
         self._vehicle_stuck_counter = 0
+    def get_init_obs(self,timestep):
+        # obtain raw data (Roach format)
+        self.obs_instance = ObsManagerHandler(self.ego_vehicles[0])
+        self.obs_instance.reset(self.ego_vehicles[0])
+        obs_dict = self.obs_instance.get_observation(timestep)
+
+        # process the observation into standard shape (Roach)
+        obs = self.process_obs(obs_dict['hero'], ['control', 'vel_xy'], train=False)
+        return obs
     def load_scenario(self, scenario, agent, route_index, rep_number):
         """
         Load a new scenario
@@ -245,6 +260,18 @@ class ScenarioManager(object):
         self.repetition_number = rep_number
 
         self._spectator = CarlaDataProvider.get_world().get_spectator()
+        self._agent_wrapper.setup_sensors(self.ego_vehicles[0])
+
+        self.init_roach()
+        timestep = 0
+        #ego_vehicles0 = CarlaDataProvider.get_ego()
+
+        obs = self.get_init_obs(timestep)
+
+        # return the initial obs_dict
+        return obs
+    def init_roach(self):
+        # New init
         self.actor_List = CarlaDataProvider.get_world().get_actors()
         self.vehicle_list = self.actor_List.filter("*vehicle*")
         self.walker_list = self.actor_List.filter("*walker*")
@@ -261,19 +288,6 @@ class ScenarioManager(object):
         self._planner = GlobalRoutePlanner(self._map,1.0)
         # To print the scenario tree uncomment the next line
         # py_trees.display.render_dot_tree(self.scenario_tree)
-
-        self._agent_wrapper.setup_sensors(self.ego_vehicles[0])
-        timestep = 0
-        #ego_vehicles0 = CarlaDataProvider.get_ego()
-
-        # obtain raw data (Roach format)
-        self.obs_instance = ObsManagerHandler(self.ego_vehicles[0])
-        self.obs_instance.reset(self.ego_vehicles[0])
-        obs_dict = self.obs_instance.get_observation(timestep)
-
-        # process the observation into standard shape (Roach)
-        obs = self.process_obs(obs_dict['hero'], ['control', 'vel_xy'],train=False)
-
         # start time
         snap_shot = CarlaDataProvider.get_world().get_snapshot()
 
@@ -289,9 +303,6 @@ class ScenarioManager(object):
             'start_wall_time': snap_shot.timestamp.platform_timestamp,
             'start_simulation_time': snap_shot.timestamp.elapsed_seconds
         }
-
-        # return the initial obs_dict
-        return obs
 
     def build_scenarios_loop(self, debug):
         """
@@ -484,7 +495,81 @@ class ScenarioManager(object):
         # roach format observation
         next_obs = self.process_obs(next_obs_dict['hero'], ['control', 'vel_xy'],train=False)
         return next_obs,reward,done
+    def _tick_scenario_record(self):
+        """
+        Run next tick of scenario and the agent and tick the world.
+        """
+        if self._running and self.get_running_status():
+            CarlaDataProvider.get_world().tick(self._timeout)
 
+        timestamp = CarlaDataProvider.get_world().get_snapshot().timestamp
+
+        if self._timestamp_last_run < timestamp.elapsed_seconds and self._running:
+            self._timestamp_last_run = timestamp.elapsed_seconds
+
+            self._watchdog.update()
+            # Update game time and actor information
+            GameTime.on_carla_tick(timestamp)
+            CarlaDataProvider.on_carla_tick()
+            self._watchdog.pause()
+
+            try:
+                self._agent_watchdog.resume()
+                self._agent_watchdog.update()
+                ego_action = self._agent_wrapper()
+                self._agent_watchdog.pause()
+
+            # Special exception inside the agent that isn't caused by the agent
+            except SensorReceivedNoData as e:
+                raise RuntimeError(e)
+
+            except Exception as e:
+                raise AgentError(e)
+
+            self._watchdog.resume()
+            self.ego_vehicles[0].apply_control(ego_action)
+
+            # Tick scenario. Add the ego control to the blackboard in case some behaviors want to change it
+            if not self._about_to_stop:
+                py_trees.blackboard.Blackboard().set("AV_control", ego_action, overwrite=True)
+                self.scenario_tree.tick_once()
+
+            if self._debug_mode > 1:
+                self.compute_duration_time()
+
+                # Update live statistics
+                self._statistics_manager.compute_route_statistics(
+                    self.route_index,
+                    self.scenario_duration_system,
+                    self.scenario_duration_game,
+                    failure_message="",
+                )
+                self._statistics_manager.write_live_results(
+                    self.route_index,
+                    self.ego_vehicles[0].get_velocity().length(),
+                    ego_action,
+                    self.ego_vehicles[0].get_location(),
+                )
+
+            if self._debug_mode > 2:
+                print("\n")
+                py_trees.display.print_ascii_tree(self.scenario_tree, show_status=True)
+                sys.stdout.flush()
+
+            # when behaviour trees get failure state, tick once before the stop to pass terminal state to the agent
+            if self._about_to_stop:
+                self._running = False
+                self._about_to_stop = False
+
+            if self.scenario_tree.status != py_trees.common.Status.RUNNING and self._running:
+                self._about_to_stop = True
+
+            ego_trans = self.ego_vehicles[0].get_transform()
+            self._spectator.set_transform(
+                carla.Transform(
+                    ego_trans.location + carla.Location(z=30), carla.Rotation(pitch=-90)
+                )
+            )
     def collect_rollouts(self,rollout_buffer,n_rollout_steps):
         n_steps = 0
         rollout_buffer.reset()
@@ -496,7 +581,8 @@ class ScenarioManager(object):
             ppo_actions, values, log_probs, mu, sigma, _ = self._policy.forward(self._last_obs)
             #values = log_probs = mu = sigma = 0.5
            # ppo_actions[0][0] = 0.2 #[[0.5,0.0]]
-            ppo_actions = [[0.2,-0.15]]
+         #   ppo_actions = [[0.2,-0.15]]
+            #ppo_actions = [[0.4, 0.0]]
             start_timestamp = CarlaDataProvider.get_world().get_snapshot().timestamp
 
             # ppo interacts with the environment
@@ -683,9 +769,10 @@ class ScenarioManager(object):
         #     "train/clip_range": self.clip_range,
         #     "train/train_epoch": epoch,
         #     "train/learning_rate": self.learning_rate
-        # }
+        # }        print(f"self._speed_queue:{self._speed_queue}")
+        #         print(f"self._vehicle_stuck_counter:{self._vehicle_stuck_counter}")
     def define_terminal(self,start_timestamp):
-        
+
         terminal_debug = 0
         ev_vel = self.ego_vehicles[0].get_velocity()
         ev_speed = np.linalg.norm(np.array([ev_vel.x, ev_vel.y]))
@@ -698,9 +785,8 @@ class ScenarioManager(object):
         is_free_road = (hazard_vehicle_loc is None) and (hazard_ped_loc is None) \
             and (light_state is None or light_state == carla.TrafficLightState.Green)
         c_vehicle_stuck = self._vehicle_stuck_counter >= self._vehicle_stuck_step
-        print(f"self._speed_queue:{self._speed_queue}")
-        print(f"self._vehicle_stuck_counter:{self._vehicle_stuck_counter}")
-        if is_free_road and np.mean(self._speed_queue) < 10:#1.0:
+
+        if is_free_road and np.mean(self._speed_queue) < 0.002: #0.04:#0.002: #0.04:#1.0:
             self._vehicle_stuck_counter += 1
         if np.mean(self._speed_queue) >= 1.0:
             self._vehicle_stuck_counter = 0
@@ -957,7 +1043,7 @@ class ScenarioManager(object):
                 continue
             return target_vehicle
         return None
-    def stop_scenario(self):
+    def stop_scenario(self,reload):
         """
         This function triggers a proper termination of a scenario
         """
@@ -972,17 +1058,17 @@ class ScenarioManager(object):
         if self.get_running_status():
             if self.scenario is not None:
                 self.scenario.terminate()
+            if reload:
+                if self._agent_wrapper is not None:
+                    self._agent_wrapper.cleanup()
+                    self._agent_wrapper = None
 
-            if self._agent_wrapper is not None:
-                self._agent_wrapper.cleanup()
-                self._agent_wrapper = None
-
-            self.analyze_scenario()
+                self.analyze_scenario()
 
         # Make sure the scenario thread finishes to avoid blocks
-        self._running = False
-        self._scenario_thread.join()
-        self._scenario_thread = None
+        # self._running = False
+        # self._scenario_thread.join()
+        # self._scenario_thread = None
 
     def compute_duration_time(self):
         """
@@ -1081,7 +1167,7 @@ class ScenarioManager(object):
 
         loc0 = self._last_route_location
         loc1 = self._global_route[0][0].transform.location
-        print(f"loc1:{loc1}")
+       # print(f"loc1:{loc1}")
         if loc1.distance(loc0) < 0.1:
             yaw = self._global_route[0][0].transform.rotation.yaw
         else:

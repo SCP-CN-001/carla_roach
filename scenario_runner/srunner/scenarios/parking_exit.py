@@ -117,7 +117,7 @@ class ParkingExit(BasicScenario):
             raise ValueError("Couldn't find viable position for the vehicle in front of the parking point")
 
         self.parking_slots.append(front_points[0].transform.location)
-
+       # print(f"front_points:{front_points} :::self._bp_attributes:{self._bp_attributes}")
         actor_front = CarlaDataProvider.request_new_actor(
             'vehicle.*', front_points[0].transform, rolename='scenario no lights', attribute_filter=self._bp_attributes)
         if actor_front is None:

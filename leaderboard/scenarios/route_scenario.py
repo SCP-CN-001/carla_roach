@@ -61,10 +61,11 @@ class RouteScenario(BasicScenario):
     INIT_THRESHOLD = 500 # Runtime initialization trigger distance to ego (m)
     PARKED_VEHICLES_INIT_THRESHOLD = INIT_THRESHOLD - 50 # Runtime initialization trigger distance to parked vehicles (m)
 
-    def __init__(self, world, config, debug_mode=0, criteria_enable=True):
+    def __init__(self, scenario_name,world, config, debug_mode=0, criteria_enable=True):
         """
         Setup all relevant parameters and create scenarios along route
         """
+        self.specific_scenario = scenario_name
         self.client = CarlaDataProvider.get_client()
         self.config = config
         self.route = self._get_route(config)
@@ -141,7 +142,7 @@ class RouteScenario(BasicScenario):
 
             scenario_config.route_var_name = "ScenarioRouteNumber{}".format(scenario_number)
             new_scenarios_config.append(scenario_config)
-
+        #print(f"new_scenarios_config:{new_scenarios_config}")
         return new_scenarios_config
 
     def _spawn_ego_vehicle(self):
@@ -293,6 +294,29 @@ class RouteScenario(BasicScenario):
                 all_scenario_classes[member[0]] = member[1]
 
         return all_scenario_classes
+    def reset(self):
+        self.other_actors = []
+        self.list_scenarios = []
+        self.occupied_parking_locations = []
+        self.available_parking_locations = []
+
+        self.behavior_tree.remove_child(self.behavior_node)
+        self.criteria_tree.remove_all_children()
+        self.criteria_tree.status = py_trees.common.Status.RUNNING
+        self.behavior_tree.add_child(self._create_behavior())
+        self.criteria_tree.add_child(self._create_test_criteria())
+
+        self.scenario_tree.remove_child(self.timeout_node)
+        self.timeout_node = self._create_timeout_behavior()
+        self.scenario_tree.add_child(self.timeout_node)
+
+        self.scenario_tree.status = py_trees.common.Status.RUNNING
+        self.scenario_tree.setup(timeout=1)
+        self.scenario_tree.initialise()
+
+        self.missing_scenario_configurations = self.scenario_configurations.copy()
+        self._parked_ids = []
+        self._get_parking_slots()
 
     def build_scenarios(self, ego_vehicle, debug=False):
         """
@@ -303,26 +327,34 @@ class RouteScenario(BasicScenario):
 
         if self.all_scenario_classes is None:
             self.all_scenario_classes = self.get_all_scenario_classes()
+           # print(f"self.all_scenario_classes:{self.all_scenario_classes}")
         if self.ego_data is None:
             self.ego_data = ActorConfigurationData(ego_vehicle.type_id, ego_vehicle.get_transform(), 'hero')
 
+
         # Part 1. Check all scenarios that haven't been initialized, starting them if close enough to the ego vehicle
+        #print(f"self.missing_scenario_configurations:{self.missing_scenario_configurations}")
         for scenario_config in self.missing_scenario_configurations:
             scenario_config.ego_vehicles = [self.ego_data]
             scenario_config.route = self.route
 
+
             try:
                 scenario_class = self.all_scenario_classes[scenario_config.type]
+              #  print(f"scenario_class:{scenario_class}")
                 trigger_location = scenario_config.trigger_points[0].location
 
                 ego_location = CarlaDataProvider.get_location(ego_vehicle)
+            #    print(f"ego_location:{ego_location}")
+            #    print(f"trigger_location:{trigger_location}")
+            #    print(f"trigger_location.distance(ego_location):{trigger_location.distance(ego_location)}")
                 if ego_location is None:
                     continue
 
                 # Only init scenarios that are close to ego
                 if trigger_location.distance(ego_location) < self.INIT_THRESHOLD:
                     scenario_instance = scenario_class(self.world, [ego_vehicle], scenario_config, timeout=self.timeout)
-
+                   # print(f"scenario_instance:{scenario_instance}")
                     # Add new scenarios to list
                     self.list_scenarios.append(scenario_instance)
                     new_scenarios.append(scenario_instance)
@@ -342,6 +374,7 @@ class RouteScenario(BasicScenario):
                         )
 
             except Exception as e:
+                print("cannot spawn")
                 print(f"\033[93mSkipping scenario '{scenario_config.name}' due to setup error: {e}")
                 if debug:
                     print(f"\n{traceback.format_exc()}")

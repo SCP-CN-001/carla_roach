@@ -14,7 +14,8 @@ import sys
 import math
 import xml.etree.ElementTree as ET
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
-sys.path.append(os.getenv('Carla_root') + "PythonAPI/carla/agents/navigation/")
+Carla_root="/home/vci-1/XT/leaderboard_roach0818/ramble/roach_v2/CARLA_Leaderboard_2.0/CARLA_Leaderboard_20/"
+sys.path.append(Carla_root + "PythonAPI/carla/agents/navigation/")
 import carla
 from global_route_planner import GlobalRoutePlanner
 #from agents.navigation.global_route_planner import GlobalRoutePlanner

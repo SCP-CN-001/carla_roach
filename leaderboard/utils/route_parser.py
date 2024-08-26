@@ -119,7 +119,6 @@ class RouteParser(object):
             positions = []
             positions_roach = []
             for position in route.find('waypoints').iter('position'):
-
                 # positions.append(carla.Location(x=float(position.attrib['x']),
                 #                     y=float(position.attrib['y']),
                 #                     z=float(position.attrib['z'])))
