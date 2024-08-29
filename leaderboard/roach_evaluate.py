@@ -12,6 +12,7 @@ Provisional code to evaluate Autonomous Agents for the CARLA Autonomous Driving 
 """
 from __future__ import print_function
 
+import time
 import traceback
 import argparse
 from argparse import RawTextHelpFormatter
@@ -35,7 +36,7 @@ from leaderboard.envs.sensor_interface import SensorConfigurationInvalid
 from leaderboard.autoagents.agent_wrapper import AgentError, validate_sensor_configuration
 from leaderboard.utils.statistics_manager import StatisticsManager, FAILURE_MESSAGES
 from leaderboard.utils.route_indexer import RouteIndexer
-
+#from utils.config_parser import AgentConfig
 
 sensors_to_icons = {
     'sensor.camera.rgb':        'carla_camera',
@@ -70,7 +71,7 @@ class LeaderboardEvaluator(object):
         self.route_scenario = None
         self.ego_vehicles = None
         self.statistics_manager = statistics_manager
-
+       # self._backup = None
         # This is the ROS1 bridge server instance. This is not encapsulated inside the ROS1 agent because the same
         # instance is used on all the routes (i.e., the server is not restarted between routes). This is done
         # to avoid reconnection issues between the server and the roslibpy client.
@@ -99,7 +100,7 @@ class LeaderboardEvaluator(object):
         # Prepare the agent timer
         self._agent_watchdog = None
         signal.signal(signal.SIGINT, self._signal_handler)
-
+        self._route_rep_cnt = 0
         self._client_timed_out = False
 
     def _signal_handler(self, signum, frame):
@@ -130,38 +131,82 @@ class LeaderboardEvaluator(object):
             return self._agent_watchdog.get_status()
         return False
 
-    def _cleanup(self):
+    def _cleanup(self,reload=True):
         """
         Remove and destroy all actors
         """
-        CarlaDataProvider.cleanup()
+        if reload:
+            CarlaDataProvider.cleanup()
 
-        if self._agent_watchdog:
-            self._agent_watchdog.stop()
+            if self._agent_watchdog:
+                self._agent_watchdog.stop()
 
-        try:
-            if self.agent_instance:
-                self.agent_instance.destroy()
-                self.agent_instance = None
-        except Exception as e:
-            print("\n\033[91mFailed to stop the agent:")
-            print(f"\n{traceback.format_exc()}\033[0m")
+            try:
+                if self.agent_instance:
+                    self.agent_instance.destroy()
+                    self.agent_instance = None
+            except Exception as e:
+                print("\n\033[91mFailed to stop the agent:")
+                print(f"\n{traceback.format_exc()}\033[0m")
 
-        if self.route_scenario:
-            self.route_scenario.remove_all_actors()
-            self.route_scenario = None
-            if self.statistics_manager:
-                self.statistics_manager.remove_scenario()
+            if self.route_scenario:
+                self.route_scenario.remove_all_actors()
+                self.route_scenario = None
+                if self.statistics_manager:
+                    self.statistics_manager.remove_scenario()
+
+            # if self.manager:
+            #     self._client_timed_out = not self.manager.get_running_status()
+            #     self.manager.cleanup()
+
+            # Make sure no sensors are left streaming
+            alive_sensors = self.world.get_actors().filter('*sensor*')
+            for sensor in alive_sensors:
+                sensor.stop()
+                sensor.destroy()
+        else:
+            # reset CarlaDataProvider
+            initial_action = carla.VehicleControl(brake=1.0, hand_brake=True)
+            self.manager.ego_vehicles[0].apply_control(initial_action)
+            for i in range(8):
+                self.world.tick()
+
+            DestroyActor = carla.command.DestroyActor
+            ApplyTransform = carla.command.ApplyTransform
+
+            CarlaDataProvider.set_runtime_init_mode(False)
+
+            batch = []
+
+            for actor_id in CarlaDataProvider._carla_actor_pool.copy():
+               # print(f"actor_id:{actor_id}::destory actor_id")
+                actor = CarlaDataProvider._carla_actor_pool[actor_id]
+                if actor is not None and actor.is_alive:
+                   # print(f"actor:{actor}::actor actor actor")
+                    if actor.attributes["role_name"] == "hero":
+                        hero_transf = self._backup["transf_map"][actor]
+                        batch.append(ApplyTransform(actor, hero_transf))
+                    else:
+                        batch.append(DestroyActor(actor))
+                        CarlaDataProvider._carla_actor_pool[actor_id] = None
+                        CarlaDataProvider._carla_actor_pool.pop(actor_id)
+
+            if CarlaDataProvider._client:
+                try:
+                    CarlaDataProvider._client.apply_batch_sync(batch)
+                except RuntimeError as e:
+                    if "time-out" in str(e):
+                        pass
+                    else:
+                        raise e
+
+            CarlaDataProvider.on_carla_tick()
+            self.world.tick()
+            self.route_scenario.reset()
 
         if self.manager:
             self._client_timed_out = not self.manager.get_running_status()
-            self.manager.cleanup()
-
-        # Make sure no sensors are left streaming
-        alive_sensors = self.world.get_actors().filter('*sensor*')
-        for sensor in alive_sensors:
-            sensor.stop()
-            sensor.destroy()
+            self.manager.cleanup(reload)
 
     def _setup_simulation(self, args):
         """
@@ -242,8 +287,58 @@ class LeaderboardEvaluator(object):
         self.statistics_manager.compute_route_statistics(
             route_index, self.manager.scenario_duration_system, self.manager.scenario_duration_game, crash_message
         )
+    def _setup_agent(self, args):
+        # AgentConfig.parse_config(args.agent_config)
+        # AgentConfig.scenario_name = args.scenario_name
+        agent_class_name = getattr(self.module_agent, "get_entry_point")()
+        agent_class_obj = getattr(self.module_agent, agent_class_name)
 
-    def _load_and_run_scenario(self, args, config):
+        # Start the ROS1 bridge server only for ROS1 based agents.
+        if getattr(agent_class_obj, "get_ros_version")() == 1 and self._ros1_server is None:
+            from leaderboard.autoagents.ros1_agent import ROS1Server
+
+            self._ros1_server = ROS1Server()
+            self._ros1_server.start()
+
+        self.agent_instance = agent_class_obj(args.host, args.port, args.debug)
+        self.agent_instance.set_global_plan(
+            self.route_scenario.gps_route, self.route_scenario.route
+        )
+        self.agent_instance.setup(args.agent_config)
+
+        # Check and store the sensors
+        if not self.sensors:
+            self.sensors = self.agent_instance.sensors()
+            track = self.agent_instance.track
+
+            # validate_sensor_configuration(self.sensors, track, args.track)
+
+            self.sensor_icons = [
+                self.sensors_to_icons[sensor["type"]] for sensor in self.sensors
+            ]
+            self.statistics_manager.save_sensors(self.sensor_icons)
+            self.statistics_manager.write_statistics()
+
+            self.sensors_initialized = True
+
+    def _get_initial_states(self):  # 备份初始的车辆状态，从而在后续的时候方便直接加载
+        def copymap(_map):
+            _memory = {}
+            for actor, value in _map.items():
+                _memory[actor] = value
+            return _memory
+
+        # print(self.route_scenario.__dict__)
+        # print(self.route_scenario.__dir__())
+
+        self._backup = {
+            "transf_map": copymap(CarlaDataProvider._actor_transform_map),
+            "loc_map": copymap(CarlaDataProvider._actor_location_map),
+            "vel_map": copymap(CarlaDataProvider._actor_velocity_map),
+        }
+        #print(f"_backup:{self._backup}")
+       # print("already copy")
+    def _load_and_run_scenario(self, args, config,next_route, initialize):
         """
         Load and run the scenario given by config.
 
@@ -253,19 +348,29 @@ class LeaderboardEvaluator(object):
         crash_message = ""
         entry_status = "Started"
 
-        print("\n\033[1m========= Preparing {} (repetition {}) =========\033[0m".format(config.name, config.repetition_index))
+        print("\n\033[1m========= Preparing {} (repetition {}) (episode {}) =========\033[0m".format(config.name, config.repetition_index, self._route_rep_cnt))
 
         # Prepare the statistics of the route
-        route_name = f"{config.name}_rep{config.repetition_index}"
+        route_name = f"{config.name}_rep{config.repetition_index}::{self._route_rep_cnt}"
         self.statistics_manager.create_route_data(route_name, config.index)
 
-        print("\033[1m> Loading the world\033[0m")
+       # print("\033[1m> Loading the world\033[0m")
 
-        # Load the world and the scenario
+        # Load the world and the scenario   Skipping scenario
         try:
-            self._load_and_wait_for_world(args, config.town)
-            self.route_scenario = RouteScenario(world=self.world, config=config, debug_mode=args.debug)
-            self.statistics_manager.set_scenario(self.route_scenario)
+            start = time.time()
+            if next_route or initialize:
+                print("\033[1m> Loading the world\033[0m")
+                self._route_rep_cnt = 0
+                self._load_and_wait_for_world(args, config.town)
+                scenario_name = None
+                self.route_scenario = RouteScenario(scenario_name=scenario_name,world=self.world, config=config, debug_mode=args.debug)
+                self.statistics_manager.set_scenario(self.route_scenario)
+            else:
+                print("\033[1m> Retry the previous route\033[0m")
+                # self.route_scenario = RouteScenario(world=self.world, config=config, debug_mode=args.debug)
+                # self.statistics_manager.set_scenario(self.route_scenario)
+                self._route_rep_cnt += 1
 
         except Exception:
             # The scenario is wrong -> set the ejecution to crashed and stop
@@ -281,9 +386,15 @@ class LeaderboardEvaluator(object):
 
         # Set up the user's agent, and the timer to avoid freezing the simulation
         try:
+       #     print(f"initialize:{initialize}")
+           # if next_route or initialize:
+
             self._agent_watchdog = Watchdog(args.timeout)
             self._agent_watchdog.start()
+
+            #self._setup_agent(args)
             agent_class_name = getattr(self.module_agent, 'get_entry_point')()
+          #  print(f"initialize：{self.module_agent}：{agent_class_name}")
             agent_class_obj = getattr(self.module_agent, agent_class_name)
 
             # Start the ROS1 bridge server only for ROS1 based agents.
@@ -296,7 +407,7 @@ class LeaderboardEvaluator(object):
             self.agent_instance.set_global_plan(self.route_scenario.gps_route, self.route_scenario.route)
             self.agent_instance.setup(args.agent_config)
 
-           # Check and store the sensors
+            # Check and store the sensors
             if not self.sensors:
                 self.sensors = self.agent_instance.sensors()
                 track = self.agent_instance.track
@@ -311,7 +422,14 @@ class LeaderboardEvaluator(object):
 
             self._agent_watchdog.stop()
             self._agent_watchdog = None
-
+            # else:
+            #     agent_class_name = getattr(self.module_agent, 'get_entry_point')()
+            #     agent_class_obj = getattr(self.module_agent, agent_class_name)
+            #     print(f"initialize11111：{self.module_agent}：{agent_class_name}")
+            #     self.agent_instance = agent_class_obj(args.host, args.port, args.debug)
+            #     self.agent_instance.set_global_plan(self.route_scenario.gps_route, self.route_scenario.route)
+            #     self.agent_instance.setup(args.agent_config)
+            #     self.agent_instance.reset()
         except SensorConfigurationInvalid as e:
             # The sensors are invalid -> set the ejecution to rejected and stop
             print("\n\033[91mThe sensor's configuration used is invalid:")
@@ -337,13 +455,25 @@ class LeaderboardEvaluator(object):
         try:
             # Load scenario and run it
             if args.record:
-                self.client.start_recorder("{}/{}_rep{}.log".format(args.record, config.name, config.repetition_index))
-            self.ego_vehicles = self.route_scenario.ego_vehicles
+                self.client.start_recorder("{}/{}_rep{}_{}.log".format(args.record, config.name, config.repetition_index,self._route_rep_cnt))
+          #  self.ego_vehicles = self.route_scenario.ego_vehicles
             # Initialize and return to the initial obs_dict
-            obs_dict = self.manager.load_scenario(self.route_scenario, self.agent_instance, config.index, config.repetition_index)
-            # Rendering and Interaction
-            self.manager.run_scenario(obs_dict,self.episodes)
-            self.episodes += 1
+            if next_route or initialize:
+             #   print("Initialize obs")
+                obs_dict = self.manager.load_scenario(self.route_scenario, self.agent_instance, config.index, config.repetition_index)
+                # Rendering and Interaction
+                self.manager.run_scenario(obs_dict,self.episodes)
+                self.manager._tick_scenario_record()
+                self._get_initial_states()
+                print(f"\033[33m- Reload time: {time.time()-start}\033[0m")
+                self.episodes += 1
+            else:
+                timestep = 0
+                #print(f"_backup:{self._backup}")
+                obs_init = self.manager.get_init_obs(timestep)
+                self.manager.init_roach()
+                self.manager.run_scenario(obs_init,self.episodes)
+                self.episodes += 1
         except AgentError:
             # The agent has failed -> stop the route
             print("\n\033[91mStopping the route, the agent has crashed:")
@@ -360,13 +490,13 @@ class LeaderboardEvaluator(object):
         # Stop the scenario
         try:
             print("\033[1m> Stopping the route\033[0m")
-            self.manager.stop_scenario()
+            self.manager.stop_scenario(next_route)
             self._register_statistics(config.index, entry_status, crash_message)
 
             if args.record:
                 self.client.stop_recorder()
 
-            self._cleanup()
+            self._cleanup(next_route)
 
         except Exception:
             print("\n\033[91mFailed to stop the scenario, the statistics might be empty:")
@@ -396,11 +526,11 @@ class LeaderboardEvaluator(object):
         self.statistics_manager.save_progress(route_indexer.index, route_indexer.total)
         self.statistics_manager.write_statistics()
 
-        crashed = False
+        crashed, next_route, initialize = False, False, True
         while route_indexer.peek() and not crashed:
-            config = route_indexer.get_next_config()
-            crashed = self._load_and_run_scenario(args, config)
-
+            config = route_indexer.get_next_config(next_route)
+            crashed = self._load_and_run_scenario(args, config,next_route, initialize)
+            initialize = False
             # Save the progress and write the route statistics
             self.statistics_manager.save_progress(route_indexer.index, route_indexer.total)
             self.statistics_manager.write_statistics()
