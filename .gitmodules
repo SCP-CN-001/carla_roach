@@ -1,6 +1,6 @@
 [submodule "leaderboardv2"]
-	path = leaderboardv2
+	path = leaderboard_20/leaderboard
 	url = https://github.com/carla-simulator/leaderboard.git
 [submodule "scenario_runner_origin"]
-	path = scenario_runner_origin
+	path = leaderboard_20/scenario_runner
 	url = https://github.com/carla-simulator/scenario_runner.git
