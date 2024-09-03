@@ -197,7 +197,7 @@ class RoachAgent(autonomous_agent.AutonomousAgent):
         self._world = CarlaDataProvider.get_world()
         self._map = self._world.get_map()
 
-        self._ego_vehicle = CarlaDataProvider.get_ego()
+        self._ego_vehicle = CarlaDataProvider.get_hero_actor()
 
         self._last_route_location = self._ego_vehicle.get_location()
         self._criteria_stop = RunStopSign(self._world)

@@ -23,19 +23,22 @@ export RESUME=False
 # Roach data collection
 export route_name=routes_town01_00.xml
 export ROUTES=${LEADERBOARD_ROOT}/data/routes_devtest.xml
+export ROUTES_SUBSET=0
+export SCENARIOS=${LEADERBOARD_ROOT}/data/all_towns_traffic_scenarios_public.json
+
 export TEAM_AGENT=${WORKSPACE}/roach/roach_agent.py
 export TEAM_CONFIG=${WORKSPACE}/roach/configs/roach_agent.yaml
-export TME_STAMP=$(date +"%Y_%m_%d_%H_%M_%s")
-export SCENARIOS=${LEADERBOARD_ROOT}/data/all_towns_traffic_scenarios_public.json
-export ROUTE_FILE=None
-export CHECKPOINT_ENDPOINT=lv1_roach_result.json
 
-python3 ${LEADERBOARD_ROOT}/leaderboard/leaderboard_evaluator.py \
+time_stamp=$(date +"%Y_%m_%d_%H_%M_%s")
+export CHECKPOINT_ENDPOINT=${WORKSPACE}/logs/L10_devtest/routes_devtest_${time_stamp}.json
+
+python3 ${WORKSPACE}/roach/leaderboard_custom/leaderboard_evaluator.py \
 --scenarios=${SCENARIOS}  \
 --routes=${ROUTES} \
+--routes-subset=${ROUTES_SUBSET} \
 --repetitions=${REPETITIONS} \
 --track=${CHALLENGE_TRACK_CODENAME} \
---checkpoint=${WORKSPACE}/logs/L10/${CHECKPOINT_ENDPOINT} \
+--checkpoint=${CHECKPOINT_ENDPOINT} \
 --agent=${TEAM_AGENT} \
 --agent-config=${TEAM_CONFIG} \
 --debug=${DEBUG_CHALLENGE} \
