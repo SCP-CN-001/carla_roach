@@ -1,29 +1,23 @@
 # Roach
 
-## Description
+This repository provides a migrated version of Roach for CARLA Leaderboard 2.0, serving as part of the benchmark suite. The implementation has referred to the [ThinkTwice](https://github.com/OpenDriveLab/DriveAdapter/tree/main) codebase used for Leaderboard 1.0.
 
-Migrate Roach to LeaderboardV2
-
-## Installation
-
-```shell
-cd leaderboard
-conda create -n Roach_V2 python==3.7
-pip install -r requirements
-```
-
-or:
-
-```shell
-cd leaderboard
-conda env create -f environment.yml
-```
+## Quick Start
 
 ## Run the LeaderboardV2_Roach
 
 ```shell
 cd leaderboard
-vim run_lv2_roach.sh
-set the LEADERBOARD_ROOT path and Carla_root path
+# edit the LEADERBOARD_ROOT path and Carla_root path
 bash run_lv2_roach.sh
+```
+
+## Thanks to
+
+- [ThinkTwice](https://github.com/OpenDriveLab/DriveAdapter/tree/main)'s implementation version.
+- [Roach](https://github.com/zhejz/carla-roach)'s original implementation version.
+
+## Citation
+
+```latex
 ```
