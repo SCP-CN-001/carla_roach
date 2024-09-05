@@ -21,8 +21,7 @@ export REPETITIONS=1
 export RESUME=False
 
 # Roach data collection
-export route_name=routes_town01_00.xml
-export ROUTES=${LEADERBOARD_ROOT}/data/routes_devtest.xml
+export ROUTES=${LEADERBOARD_ROOT}/data/routes_testing.xml
 export ROUTES_SUBSET=0
 export SCENARIOS=${LEADERBOARD_ROOT}/data/all_towns_traffic_scenarios_public.json
 
@@ -30,7 +29,7 @@ export TEAM_AGENT=${WORKSPACE}/roach/roach_agent.py
 export TEAM_CONFIG=${WORKSPACE}/roach/configs/roach_agent.yaml
 
 time_stamp=$(date +"%Y_%m_%d_%H_%M_%s")
-export CHECKPOINT_ENDPOINT=${WORKSPACE}/logs/L10_devtest/routes_devtest_${time_stamp}.json
+export CHECKPOINT_ENDPOINT=${WORKSPACE}/logs/L10_testing/log_route_${ROUTES_SUBSET}_${time_stamp}.json
 
 python3 ${WORKSPACE}/roach/leaderboard_custom/leaderboard_evaluator.py \
 --scenarios=${SCENARIOS}  \
